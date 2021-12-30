@@ -5,6 +5,7 @@ using LibHac.Fs;
 using LibHac.Ns;
 using Ryujinx.Common;
 using Ryujinx.Common.Logging;
+using Ryujinx.HLE.Exceptions;
 using Ryujinx.HLE.HOS.Ipc;
 using Ryujinx.HLE.HOS.Kernel.Common;
 using Ryujinx.HLE.HOS.Kernel.Memory;
@@ -12,9 +13,11 @@ using Ryujinx.HLE.HOS.Kernel.Threading;
 using Ryujinx.HLE.HOS.Services.Am.AppletAE.Storage;
 using Ryujinx.HLE.HOS.Services.Am.AppletOE.ApplicationProxyService.ApplicationProxy.Types;
 using Ryujinx.HLE.HOS.Services.Sdb.Pdm.QueryService;
+using Ryujinx.HLE.HOS.Services.Sm;
 using Ryujinx.HLE.HOS.SystemState;
 using System;
 using System.Numerics;
+using System.Threading;
 
 using static LibHac.Fs.ApplicationSaveDataManagement;
 using AccountUid    = Ryujinx.HLE.HOS.Services.Account.Acc.UserId;
@@ -36,6 +39,8 @@ namespace Ryujinx.HLE.HOS.Services.Am.AppletOE.ApplicationProxyService.Applicati
         private int _friendInvitationStorageChannelEventHandle;
         private int _notificationStorageChannelEventHandle;
         private int _healthWarningDisappearedSystemEventHandle;
+
+        private int _jitLoaded;
 
         private HorizonClient _horizon;
 
@@ -629,6 +634,32 @@ namespace Ryujinx.HLE.HOS.Services.Am.AppletOE.ApplicationProxyService.Applicati
             }
 
             context.Response.HandleDesc = IpcHandleDesc.MakeCopy(_healthWarningDisappearedSystemEventHandle);
+
+            return ResultCode.Success;
+        }
+
+        [CommandHipc(1001)] // 10.0.0+
+        // PrepareForJit()
+        public ResultCode PrepareForJit(ServiceCtx context)
+        {
+            if (Interlocked.Exchange(ref _jitLoaded, 1) == 0)
+            {
+                string jitPath = context.Device.System.ContentManager.GetInstalledContentPath(0x010000000000003B, FileSystem.StorageId.NandSystem, LibHac.FsSystem.NcaUtils.NcaContentType.Program);
+                string filePath = context.Device.FileSystem.SwitchPathToSystemPath(jitPath);
+
+                if (string.IsNullOrWhiteSpace(filePath))
+                {
+                    throw new InvalidSystemResourceException($"JIT (010000000000003B) system title not found! The JIT will not work, provide the system archive to fix this error. (See https://github.com/Ryujinx/Ryujinx#requirements for more information)");
+                }
+
+                context.Device.Application.LoadServiceNca(filePath);
+
+                // FIXME: Most likely not how this should be done?
+                while (!IUserInterface.IsServiceRegistered("jit:u"))
+                {
+                    IUserInterface.WaitForServiceRegistration();
+                }
+            }
 
             return ResultCode.Success;
         }
